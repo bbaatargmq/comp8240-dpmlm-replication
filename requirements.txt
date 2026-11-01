@@ -1,0 +1,10 @@
+importlib_resources
+nltk
+numpy
+spacy
+torch
+transformers
+wn
+tqdm
+presidio-analyzer
+presidio-anonymizer
