@@ -1,0 +1,21 @@
+setting,attribute,epsilon,U_r/U_o,P_r/P_o,RG
+static,gender,10,1.144,0.934,0.21
+static,gender,25,1.006,0.934,0.072
+static,gender,50,1.003,1.006,-0.003
+static,gender,100,1.144,0.928,0.216
+static,gender,250,0.997,0.957,0.04
+static,age bracket,10,1.144,0.842,0.302
+static,age bracket,25,1.006,0.872,0.133
+static,age bracket,50,1.003,0.909,0.094
+static,age bracket,100,1.144,0.885,0.259
+static,age bracket,250,0.997,0.898,0.099
+adaptive,gender,10,1.138,0.964,0.174
+adaptive,gender,25,0.997,0.915,0.082
+adaptive,gender,50,1.0,0.927,0.073
+adaptive,gender,100,1.0,0.964,0.036
+adaptive,gender,250,1.0,0.97,0.03
+adaptive,age bracket,10,1.138,0.919,0.219
+adaptive,age bracket,25,0.997,0.881,0.116
+adaptive,age bracket,50,1.0,0.893,0.107
+adaptive,age bracket,100,1.0,0.936,0.064
+adaptive,age bracket,250,1.0,0.917,0.083

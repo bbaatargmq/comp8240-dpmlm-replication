@@ -1,0 +1,11 @@
+dataset,condition,meaning,fluency,cossim
+Reddit,eps=10,1.0,1.0,0.14
+Reddit,eps=250,1.48,1.42,0.68
+Reddit,eps=50,1.3,1.25,0.58
+Reddit,identical (control),5.0,3.55,1.0
+Reddit,mismatched (control),1.02,1.12,0.23
+SST-2,eps=10,1.0,1.0,0.18
+SST-2,eps=250,1.5,1.6,0.63
+SST-2,eps=50,1.25,1.32,0.57
+SST-2,identical (control),5.0,4.7,1.0
+SST-2,mismatched (control),1.0,1.25,0.2

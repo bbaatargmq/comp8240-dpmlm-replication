@@ -1,0 +1,37 @@
+task,setting,epsilon,F1,Acc,PP+
+utility: subreddit,static,original,48.05,92.5,-1.0
+utility: subreddit,adaptive,original,48.32,93.5,0.0
+utility: subreddit,static,10,54.98,93.5,0.0
+utility: subreddit,adaptive,10,54.98,93.5,0.0
+utility: subreddit,static,25,48.32,93.5,0.0
+utility: subreddit,adaptive,25,48.19,93.0,-0.5
+utility: subreddit,static,50,48.19,93.0,-0.5
+utility: subreddit,adaptive,50,48.32,93.5,0.0
+utility: subreddit,static,100,54.98,93.5,0.0
+utility: subreddit,adaptive,100,48.32,93.5,0.0
+utility: subreddit,static,250,47.92,92.0,-1.5
+utility: subreddit,adaptive,250,48.32,93.5,0.0
+privacy: gender,static,original,83.5,83.5,33.5
+privacy: gender,adaptive,original,81.42,81.5,31.5
+privacy: gender,static,10,78.0,78.0,28.0
+privacy: gender,adaptive,10,78.5,78.5,28.5
+privacy: gender,static,25,77.96,78.0,28.0
+privacy: gender,adaptive,25,74.49,74.5,24.5
+privacy: gender,static,50,83.99,84.0,34.0
+privacy: gender,adaptive,50,75.5,75.5,25.5
+privacy: gender,static,100,77.49,77.5,27.5
+privacy: gender,adaptive,100,78.47,78.5,28.5
+privacy: gender,static,250,79.93,80.0,30.0
+privacy: gender,adaptive,250,78.98,79.0,29.0
+privacy: age bracket,static,original,66.19,66.5,16.5
+privacy: age bracket,adaptive,original,63.77,64.0,14.0
+privacy: age bracket,static,10,55.72,56.0,6.0
+privacy: age bracket,adaptive,10,58.59,59.0,9.0
+privacy: age bracket,static,25,57.73,58.0,8.0
+privacy: age bracket,adaptive,25,56.18,56.5,6.5
+privacy: age bracket,static,50,60.14,60.5,10.5
+privacy: age bracket,adaptive,50,56.93,57.0,7.0
+privacy: age bracket,static,100,58.59,59.0,9.0
+privacy: age bracket,adaptive,100,59.67,60.0,10.0
+privacy: age bracket,static,250,59.47,59.5,9.5
+privacy: age bracket,adaptive,250,58.45,58.5,8.5

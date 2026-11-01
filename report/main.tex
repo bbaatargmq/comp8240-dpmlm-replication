@@ -1,0 +1,305 @@
+\documentclass[11pt]{article}
+
+\usepackage[final]{acl}
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{xcolor}
+\usepackage{url}
+
+% ---------------------------------------------------------------------------
+% Every number, table, example and figure in generated/ is produced from the
+% notebook outputs by  python analysis/make_report_assets.py results/ report/generated/
+% ---------------------------------------------------------------------------
+\input{generated/numbers.tex}
+\newcommand{\repourl}{\url{https://github.com/bbaatargmq/comp8240-dpmlm-replication}}
+\newcommand{\todo}[1]{\textcolor{red}{[#1]}}
+
+\title{Replicating and Extending DP-MLM: Differentially Private Text Rewriting with Masked Language Models on New Review and Self-Disclosure Data}
+
+\author{
+  Bayarbaatar Gonchigsuren \\
+  Student ID: 48728497 \\
+  School of Computing, Macquarie University \\
+  \texttt{bayarbaatar.gonchigsuren@students.mq.edu.au}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+DP-MLM \citep{meisenbacher-etal-2024-dp-mlm} rewrites text under differential privacy (DP) by masking each content word in turn and sampling its replacement from a clipped, temperature-scaled RoBERTa distribution. We replicate the method with the authors' released package and extend it to two datasets on which it has not been evaluated. On GLUE SST-2, our BLEU and embedding-similarity curves follow the paper's closely at strict budgets and are slightly lower at loose ones, while a static sentiment-utility proxy shows the same trend as the paper's fine-tuning results. Utility carries over to longer IMDb reviews. For privacy, we construct a Reddit dataset of \FunTag{} posts whose authors disclose their gender and age in the title, remove these tags, and attack the rewritten text. Age-bracket inference drops by up to 10 F1 points, but gender inference barely changes. We show that this is because DP-MLM never rewrites stopwords: a classifier that uses only eight third-person pronouns, which refer to the poster's partner, reaches the same gender F1 at every budget. An open LLM used as a judge, validated with control pairs, rates even $\varepsilon=250$ rewrites as poorly meaning-preserving although their embedding similarity is high: DP-MLM keeps a text's topic better than its meaning. All code is public.\footnote{\repourl}
+\end{abstract}
+
+% =========================================================================
+\section{Introduction}
+% =========================================================================
+Text often carries personal information that is not confined to fixed fields: a review or a forum post can reveal its author's gender, age or identity through word choice alone. \emph{DP text rewriting} tackles this by replacing a text with a privatised version under a formal differential privacy guarantee \citep{dwork2006differential} before it is shared or used for training. This project replicates \citet{meisenbacher-etal-2024-dp-mlm}, \emph{DP-MLM: Differentially Private Text Rewriting Using Masked Language Models} (Findings of ACL 2024),\footnote{\url{https://aclanthology.org/2024.findings-acl.554/}} one of the unit's default projects. As a default project, we only summarise the method and its evaluation as far as needed to follow the replication.
+
+\paragraph{The method.} Earlier DP rewriting methods paraphrase the input with an autoregressive decoder (DP-Paraphrase, \citealp{mattern-etal-2022-limits}; DP-Prompt, \citealp{utpala2023locally}), which chooses each token without seeing the tokens to its right. DP-MLM instead uses an encoder, RoBERTa-base \citep{liu2019roberta}, which predicts a masked word from both sides of its context. For every non-stopword token, the token is masked, the \emph{original} sentence is concatenated in front of the masked one as extra context, and RoBERTa's logits at the masked position are clipped to $[C_{\min}, C_{\max}]$, so the sensitivity is $\Delta = C_{\max}-C_{\min}$. A replacement is sampled from $\mathrm{softmax}(\text{logits}\cdot\varepsilon/2\Delta)$, which is the exponential mechanism \citep{mcsherry2007mechanism} and is $\varepsilon$-DP per token. A text of $n$ rewritten tokens therefore costs $n\varepsilon$ in total under sequential composition.
+
+\paragraph{Evaluation in the paper.} Utility is measured on GLUE \citep{wang-etal-2018-glue}: a DeBERTaV3-base classifier \citep{he2021debertav3} is fine-tuned on privatised training data and evaluated on original validation data. On four tasks the paper also reports BLEU \citep{papineni-etal-2002-bleu} and Sentence-BERT cosine similarity (CosSim; \citealp{reimers-gurevych-2019-sentence}) between original and rewritten text. Empirical privacy is measured on Trustpilot reviews with author gender \citep{hovy-etal-2015-user} and Yelp reviews from 10 authors \citep{utpala2023locally}, with a \emph{static} attacker (trained on original text) and an \emph{adaptive} attacker (trained on privatised text). Both are summarised by the Relative Gain
+\begin{equation}
+\mathrm{RG} = \frac{U_r}{U_o} - \frac{P_r}{P_o},
+\label{eq:rg}
+\end{equation}
+where $U$ is utility F1, $P$ is attacker F1, and $o$/$r$ denote original and rewritten text; $\mathrm{RG}>0$ means privacy improved by more than utility was lost. On SST-2, DP-MLM reaches 68.5\% accuracy at $\varepsilon=10$ and 86.1\% at $\varepsilon=250$ against a non-private 95.7\%, ahead of both baselines at strict budgets; on Trustpilot, static gender F1 falls from 69.6 to 59.7 at $\varepsilon=10$ (RG 0.12) and recovers fully by $\varepsilon=100$.
+
+\paragraph{This project.} Section~\ref{sec:replication} replicates the mechanism and its utility evaluation on SST-2. Section~\ref{sec:newdata} introduces the new data: IMDb \citep{maas-etal-2011-learning} and a Reddit self-disclosure dataset we built. Section~\ref{sec:results} reports results on the new data, including an LLM-as-judge evaluation, and Sections~\ref{sec:ethics}--\ref{sec:conclusion} discuss ethics and reflect on the project.
+
+% =========================================================================
+\section{Replication of the Original Work}
+\label{sec:replication}
+% =========================================================================
+
+\subsection{Environment and code}
+The authors release their code on GitHub\footnote{\url{https://github.com/sjmeis/DPMLM}} and as the PyPI package \texttt{dpmlm}. All experiments ran in Google Colab notebooks (\texttt{dp\_mlm\_replication.ipynb} and \texttt{llm\_evaluation.ipynb}) on an \EnvGPU{} GPU with Python \EnvPython, PyTorch \EnvTorch, Transformers \EnvTransformers, \texttt{dpmlm} \EnvDpmlm, sentence-transformers \EnvSbert{} and sacreBLEU \EnvSacrebleu{} \citep{post-2018-call}. Each notebook runs end to end with \emph{Runtime $\rightarrow$ Run all} (about 45 and 15 minutes); a script in \texttt{analysis/} turns their outputs into the tables of this report, so no number was copied by hand. Data samples use seed 42; DP sampling is itself random, so individual rewrites differ between runs.
+
+Getting the official code to run required two fixes, both caused by library drift rather than by the method. First, recent NLTK versions need the \texttt{punkt\_tab} resource, which the package does not download. Second, \texttt{dpmlm} 1.3.0 sets \texttt{torch.backends.cuda.matmul.}\allowbreak\texttt{fp32\_precision} at import time, an attribute that only exists in very recent PyTorch releases, so the import fails on Colab. The notebook wraps this one line in \texttt{try}/\texttt{except} before importing the package.
+
+\paragraph{An instructive first attempt.} Before using the package we re-implemented the mechanism from the paper's description (\texttt{early\_attempt/} in the repository). That version differed from the paper in five ways: (i)~logits were clipped to hand-picked bounds ($\pm5$ or $\pm10$) instead of bounds calibrated on RoBERTa logits; (ii)~the temperature was $(C_{\max}-C_{\min})/\varepsilon$, missing the factor~2 of the exponential mechanism, so the real guarantee was $2\varepsilon$; (iii)~only one token or a random three-token span was rewritten, not every content word; (iv)~one script omitted the concatenation of the original sentence; and (v)~similarity was TF-IDF cosine rather than sentence embeddings. Its outputs looked plausible but its numbers were not comparable with the paper. The lesson is that the paper's description is correct, but the details that determine the privacy guarantee (calibration and temperature) are easy to get wrong, and the released code is the real specification.
+
+\paragraph{Mechanism settings.} We use the package defaults, which follow the paper: RoBERTa-base, English stopwords and punctuation left unchanged, the original sentence concatenated as context, and clipping bounds $[C_{\min}, C_{\max}] = [\ClipMin, \ClipMax]$, i.e.\ $\Delta = \Sensitivity$. The paper derives the bounds as $(\mu, \mu+4\sigma)$ of RoBERTa logits on 1{,}000 SST-2 sentences but does not print them, so we could only check that the package bounds follow this rule. We use the batched rewriting function, which predicts all masked positions of a text in parallel with the same per-token mechanism.
+
+\subsection{Evaluation protocol}
+We privatise \NSST{} randomly sampled SST-2 validation sentences \citep{socher-etal-2013-recursive} (mean length \SSTLen{} words) at each of the paper's five budgets and compute corpus BLEU (sacreBLEU, reported on a 0--1 scale as in the paper), mean CosSim with \texttt{all-MiniLM-L6-v2} (the embedding model family of the paper), and the share of original words not kept in an alignment of original and rewrite (``\% changed''). For sentiment utility we did not repeat the paper's protocol of fine-tuning DeBERTaV3 three times per privatised training set: privatising the 67k SST-2 training sentences is roughly 3.4M masked predictions per budget, beyond our Colab budget. We report instead a \emph{static utility proxy}: the accuracy of an off-the-shelf DistilBERT SST-2 classifier on the rewritten validation sentences. It measures whether a standard model still reads the right sentiment after rewriting. It should follow the paper's trend but be lower, because a classifier fine-tuned on privatised text learns to read the noise and a fixed one cannot.
+
+\begin{table*}[t]
+\centering
+\small
+\input{generated/tab_sst2.tex}
+\caption{Replication on SST-2 ($n=\NSST$). \textit{Paper}: DP-MLM results from \citet[Tables 1--2]{meisenbacher-etal-2024-dp-mlm}. $^\dagger$DeBERTaV3 fine-tuned on privatised training data, mean of 3 runs. $^\ddagger$Off-the-shelf DistilBERT SST-2 classifier on privatised validation sentences (static proxy). ``\% changed'': share of original words not kept (word alignment).}
+\label{tab:sst2}
+\end{table*}
+
+\begin{table}[t]
+\centering
+\small
+\input{generated/ex_demo1.tex}
+\caption{DP-MLM rewrites of one sentence at each budget (single random draw from our notebook).}
+\label{tab:demo}
+\end{table}
+
+\subsection{Results}
+Table~\ref{tab:sst2} compares our numbers with the paper and Table~\ref{tab:demo} shows example rewrites. The lexical and semantic curves are reproduced closely at strict budgets: at $\varepsilon=10$ and 25 our BLEU (\SSTBleuTen, \SSTBleuTwentyFive) and CosSim (\SSTCosTen, \SSTCosTwentyFive) are within 0.01 of the paper. The shape of the curve is also the same: most of the gain happens between $\varepsilon=25$ and 50, and utility saturates after $\varepsilon=100$ (paper: BLEU 0.22$\rightarrow$0.23; ours \SSTBleuHundred$\rightarrow$\SSTBleuTwoFifty). At loose budgets our values are lower, by up to 0.04 BLEU and 0.06 CosSim at $\varepsilon=250$.
+
+The static accuracy proxy rises from \SSTAccTen\% at $\varepsilon=10$ to \SSTAccHundred\% at $\varepsilon=100$, against \SSTAccOrig\% on original text. Relative to its own non-private value, the proxy keeps 57\% of the baseline accuracy at $\varepsilon=10$ and 91\% at $\varepsilon=100$; the paper's fine-tuned classifier keeps 72\% and 90\%. As expected, the proxy is lower than the paper's fine-tuned accuracy at strict budgets (\SSTAccTen{} vs.\ 68.5 at $\varepsilon=10$) and close to it at $\varepsilon=100$ (\SSTAccHundred{} vs.\ 86.2). The dip at $\varepsilon=250$ (\SSTAccTwoFifty\%) is within noise: with 150 sentences the standard error of an accuracy near 80\% is about 3.3 points, and each budget is a single random draw.
+
+Three factors can explain the remaining gap at high $\varepsilon$. First, SST-2 sentences are lower-cased and pre-tokenised (\emph{``it 's''}, \emph{`` , ''}) while DP-MLM outputs detokenised text, so even unchanged words can count as BLEU mismatches; BLEU also depends on its implementation and tokenisation \citep{post-2018-call}, which the paper does not specify. Second, we use the current package (1.3.0, with batched prediction and a sliding context window added in 2025) rather than the code version of the paper. Third, our sample is \NSST{} sentences rather than the full validation set. A notable observation is that even at $\varepsilon=250$ about half of the words are changed (\SSTChgTwoFifty\%); many replacements are close synonyms or inflections (\emph{waiter}$\rightarrow$\emph{server}, \emph{lives}$\rightarrow$\emph{live}), which is why CosSim stays high while BLEU stays low. We consider the replication of the mechanism and its lexical/semantic utility curves successful, and the replication of downstream utility partial.
+
+\paragraph{What was not replicated.} We did not rerun the Trustpilot and Yelp privacy experiments or the DP-Paraphrase/DP-Prompt baselines. The paper's Trustpilot sample and Yelp author split are not released with the code, DP-Paraphrase needs a separately distributed fine-tuned GPT-2, and each baseline multiplies GPU time. Instead, we apply the paper's privacy protocol, with both attacker types and RG, to our constructed dataset (Section~\ref{sec:results}), which tests the same claim on new data.
+
+% =========================================================================
+\section{Construction of New Data}
+\label{sec:newdata}
+% =========================================================================
+We use one existing dataset that DP-MLM has not been evaluated on, to test utility on longer text, and one constructed dataset, to test privacy in the way Trustpilot and Yelp do in the paper.
+
+\subsection{Existing data: IMDb movie reviews}
+IMDb \citep{maas-etal-2011-learning}\footnote{\url{https://huggingface.co/datasets/stanfordnlp/imdb}} contains 50{,}000 movie reviews with balanced binary sentiment labels. It is close to SST-2 in task but different in form: reviews are long (about 230 words), informal, written in natural casing and contain HTML line breaks. Length matters for DP-MLM, because the total budget grows as $n\varepsilon$ and runtime grows linearly with $n$. We sample \NIMDB{} test reviews, remove \texttt{<br />} tags and keep the leading sentences up to 60 words (mean \IMDBLen{} words). The non-private baseline is measured on the same truncated text. Evaluation is identical to SST-2.
+
+\subsection{Constructed data: Reddit self-disclosure}
+\paragraph{Motivation.} Trustpilot and Yelp test whether rewriting hides \emph{who} wrote a text. We wanted a dataset where (a)~the sensitive attribute is something the authors disclosed about themselves, not inferred by researchers; (b)~there is more than one sensitive attribute; and (c)~the domain is personal narrative, where privatisation matters most.
+
+\paragraph{Source.} We use the Reddit TL;DR corpus \citep{volske-etal-2017-tl} in the filtered version of \citet{stiennon2020learning}, distributed on HuggingFace as \texttt{trl-lib/tldr}.\footnote{\url{https://huggingface.co/datasets/trl-lib/tldr}} Each example has a subreddit, a title and a post. In advice subreddits, posters conventionally tag themselves in the title, e.g.\ \emph{``Me [24 F] with my boyfriend [27 M] of 2 years\ldots''}. These tags give labels without annotation cost.
+
+\paragraph{Pipeline.} The construction is fully scripted (Part 4 of the notebook):
+\begin{enumerate}
+\setlength\itemsep{0pt}
+\item \textbf{Collect:} parse subreddit, title and post of every example.
+\item \textbf{Extract labels:} a regular expression keeps posts whose title \emph{starts} with the poster's own tag (\emph{Me [24F]}, \emph{I (31 m)}, \emph{(f/22)}, \ldots). This is the main difficulty: titles also tag partners and family members (\emph{``my bf [27 M]''}), and only the first-person tag identifies the poster. Labels are gender (M/F) and age bracket ($\le$25 vs.\ $>$25, close to the median age).
+\item \textbf{Remove leakage:} delete every age/gender tag from the post, drop posts that still state the poster's age in words (\emph{``I'm 24''}, \emph{``24 years old''}), replace URLs and \texttt{u/} usernames with placeholders, and replace person names found by spaCy NER with \texttt{[NAME]}. Indirect cues (\emph{boyfriend}, \emph{college}) are kept on purpose: they are the realistic signal that privatisation has to remove.
+\item \textbf{Filter:} keep posts of 15--60 words after cleaning (to bound DP cost) and remove duplicates.
+\item \textbf{Sample:} draw 4{,}000 posts balanced over gender $\times$ age bracket. The utility label is the subreddit, with subreddits below 5\% of the sample merged into \emph{other}.
+\end{enumerate}
+
+\begin{table}[t]
+\centering
+\small
+\input{generated/tab_funnel.tex}
+\caption{Construction funnel of the Reddit self-disclosure dataset.}
+\label{tab:funnel}
+\end{table}
+
+\begin{table*}[t]
+\centering
+\small
+\input{generated/ex_reddit.tex}
+\caption{Snippets from the constructed dataset after cleaning (one per gender $\times$ age-bracket cell). The tags were removed from the text; the bold labels were mined from the title.}
+\label{tab:reddit-ex}
+\end{table*}
+
+\paragraph{Statistics.} Table~\ref{tab:funnel} shows the construction funnel and Table~\ref{tab:reddit-ex} shows example data. \PctTagged\% of the \FunParsed{} posts carry a first-person tag in the title, and very few are lost to the leakage and length filters, leaving \FunDedup{} posts. In the balanced sample, ages range from \AgeMin{} to \AgeMax{} (median \AgeMedian) and posts have \RedditLen{} words on average. The tagging convention is specific to relationship forums, so \PctRelationships\% of the sample comes from r/relationships; the utility label therefore has only \NSubLabels{} classes (\SubLabels) with \PctOther\% in \emph{other}, which turned out to matter (Section~\ref{sec:privacy}). We split the sample into \NTest{} test posts and \NTrain{} training posts, of which \NAdapt{} are also privatised at every budget for the adaptive attacker. Figure~\ref{fig:reddit-overview} (appendix) shows the age and subreddit distributions.
+
+\paragraph{Label quality and agreement.} Labels come from the posters' own words, so the main risk is an \emph{extraction} error (e.g.\ picking up the partner's tag), not disagreement about the attribute. We checked labels in three ways. (1)~\emph{Internal consistency:} where the post body repeats a first-person tag, it agrees with the title label (age within one year, same gender) in \AgreeRate\% of \AgreeN{} cases. (2)~\emph{LLM annotator:} an instruction-tuned LLM (\JudgeModel) read the title and post of a random audit sample of 100 extracted posts and stated the poster's gender and age (prompt in Appendix~\ref{app:prompts}); Table~\ref{tab:agreement} reports Cohen's $\kappa$ \citep{cohen1960coefficient} against the regex labels. (3)~\emph{Manual check of disagreements:} we read the title of every post on which the two disagreed.
+
+Agreement on age bracket is almost perfect ($\kappa=\KappaRegLLMA$; the only disagreement is a ``?'' answer). Agreement on gender is only moderate ($\kappa=\KappaRegLLMG$, \RawRegLLMG\% raw agreement), but the confusion is entirely one-sided: all 28 disagreements are posts labelled \emph{M} by the regex for which the LLM answered \emph{F}, and in every case the title states a male poster (e.g.\ \emph{``I [m20] am getting bored of my [f20] girlfriend''}). Often the LLM appears to copy the partner's tag, but it also answers \emph{F} for titles with no female tag at all (\emph{``Me (23m) with my friends (22m)''}), which indicates a systematic bias of the 3B model rather than ambiguity in the data. We therefore found no extraction error in the audit sample, and the moderate $\kappa$ measures the weakness of the LLM annotator, not of the labels. A full independent human annotation of the sample was planned but not completed in time; it would be the first addition to this dataset.
+
+\begin{table}[t]
+\centering
+\small
+\input{generated/tab_agreement.tex}
+\caption{Label agreement on the 100-post audit sample. ``Regex'': labels mined from titles. ``?'' answers count as disagreement.}
+\label{tab:agreement}
+\end{table}
+
+% =========================================================================
+\section{Results on New Data}
+\label{sec:results}
+% =========================================================================
+
+\subsection{Utility on IMDb}
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{3.5pt}
+\input{generated/tab_imdb.tex}
+\caption{Utility on SST-2 (replication) and IMDb (new) by budget $\varepsilon$; IMDb reviews truncated to $\le$60 words. Acc is the static sentiment proxy.}
+\label{tab:imdb}
+\end{table}
+
+Table~\ref{tab:imdb} and Figure~\ref{fig:utility} compare IMDb with SST-2. IMDb follows the same monotone curve and the same saturation after $\varepsilon=100$, so the paper's utility behaviour generalises to longer, informal reviews. Lexical overlap is clearly higher on IMDb (BLEU \IMDBBleuTen--\IMDBBleuTwoFifty{} vs.\ \SSTBleuTen--\SSTBleuTwoFifty) and fewer words are changed (\IMDBChgTwoFifty\% vs.\ \SSTChgTwoFifty\% at $\varepsilon=250$). We attribute this mainly to tokenisation, since IMDb is not pre-tokenised, and to a higher share of stopwords in conversational text. Sentiment is also better preserved relative to the non-private value: \IMDBAccHundred\% vs.\ \IMDBAccOrig\% at $\varepsilon=100$ (98\% of the baseline, against 91\% on SST-2), plausibly because a 50-word review repeats its sentiment several times and some of these cues survive. The non-private accuracy on truncated IMDb (\IMDBAccOrig\%) is lower than on SST-2 because the opening sentences of a review often do not yet contain the verdict. Utility per token is thus similar or better on longer text, but the guarantee is not: an IMDb text of \IMDBLen{} words consumes several times the total budget of an SST-2 sentence. The paper mentions the $n\varepsilon$ composition, but its benchmark of short sentences does not expose this.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{generated/utility_sst2_imdb.png}
+\caption{BLEU, CosSim and static sentiment accuracy against $\varepsilon$ (log scale) for SST-2 and IMDb. Dashed lines: non-private values.}
+\label{fig:utility}
+\end{figure*}
+
+\subsection{Privacy on the Reddit self-disclosure data}
+\label{sec:privacy}
+We follow the paper's protocol with lighter models. The utility task is subreddit classification and the privacy tasks are gender and age-bracket inference, all with TF-IDF (1--2-grams) and logistic regression as a fast stand-in for DeBERTaV3. The \emph{static} attacker is trained on original text and tested on privatised test posts; the \emph{adaptive} attacker is trained on \NAdapt{} privatised training posts at the same $\varepsilon$ (its ``Orig.'' column uses the same posts unprivatised). We also ran a zero-shot LLM attacker on 100 test posts. Table~\ref{tab:reddit} gives macro-F1 and RG; chance level is 50 for both attributes.
+
+\begin{table*}[t]
+\centering
+\small
+\input{generated/tab_reddit.tex}
+\caption{Results on the constructed Reddit dataset (macro-F1 \%, $n_{\text{test}}=\NTest$). Lower attacker F1 means better privacy. ``Pronouns only'': logistic regression on counts of eight third-person pronouns (\emph{he, him, his, himself, she, her, hers, herself}) trained on original text. The utility task is degenerate (always predicts the majority subreddit), so RG here reflects only the privacy term; see text.}
+\label{tab:reddit}
+\end{table*}
+
+\paragraph{Utility task.} The subreddit classifier predicts \emph{relationships} for almost every post: its accuracy is \SubAccOrig\%, the majority rate, and its macro-F1 (\FSubSOrig) is that of a majority classifier on two classes. Its F1 moves only when one or two \emph{other} posts happen to be classified correctly (\FSubSTen{} at $\varepsilon=10$). The utility term in RG is therefore flat and uninformative, and the positive RG values in Table~\ref{tab:reddit} reflect only the drop in attacker F1. This is a weakness of our dataset design, discussed in Section~\ref{sec:conclusion}; we use the BLEU/CosSim of the rewrites and the LLM judge (Section~\ref{sec:judge}) as utility evidence for Reddit instead.
+
+\paragraph{Age.} On original text, the static attacker infers the age bracket with \FAgeSOrig{} F1, so age is leaked, if weakly. Rewriting reduces this to \FAgeSTen{} at $\varepsilon=10$ and to about 58--60 at all larger budgets; the adaptive attacker behaves similarly (\FAgeAOrig$\rightarrow$\FAgeATen). The effect is real but modest and almost independent of $\varepsilon$, which is consistent with DP-MLM changing about half of the words even at $\varepsilon=250$.
+
+\paragraph{Gender.} Gender is strongly leaked (static \FGenSOrig{} F1 on original text) and DP-MLM barely hides it: static F1 is \FGenSTen{} at $\varepsilon=10$ and between 77 and 84 at other budgets, and the adaptive attacker is similar. This is a much weaker effect than the paper's Trustpilot result, where static gender F1 fell by 10 points at $\varepsilon=10$. We traced the cause to the stopword rule of DP-MLM. In heterosexual relationship posts, the poster's partner is referred to with \emph{he} or \emph{she}, and these pronouns are English stopwords that DP-MLM never rewrites. In the test posts, the count of third-person pronouns after rewriting at $\varepsilon=10$ is essentially unchanged (\PronN{} occurrences before rewriting, \PronKeep\% of that number after), while only \RelKeep\% of explicit relationship nouns (\emph{boyfriend, wife, \ldots}) survive. A classifier that sees \emph{only} eight pronoun counts reaches \PronOrig{} F1 on original text and \PronTen--\PronTwoFifty{} on rewritten text at every budget, i.e.\ it explains almost all of the remaining gender leakage. Table~\ref{tab:demo-nurse} in the appendix shows the effect on our demo sentence. This is a new, concrete failure mode: the formal guarantee covers only the tokens that are rewritten, and the choice of which tokens are ``safe'' to keep is a privacy decision in itself.
+
+\paragraph{LLM attacker and RG.} The zero-shot LLM attacker failed: on \emph{original} text it reaches only \LLMAttGOrig{} (gender) and \LLMAttAOrig{} (age) macro-F1, below the chance level of 50, and its scores on rewritten text (\LLMAttGTen{} and \LLMAttATen{} at $\varepsilon=10$) are in the same range. Such F1 values come from near-constant predictions, consistent with the bias seen in the annotator role. The LLM row therefore says nothing about DP-MLM and is not used in our conclusions; a larger or better-prompted model would be needed for a meaningful LLM adversary. RG is positive at every budget (largest at $\varepsilon=10$: 0.21 for gender and 0.30 for age, static), but given the flat utility term this only restates the privacy result. With $n=200$ test posts, the standard error of an F1 near 60--80 is about 3 points, so the non-monotone variation between $\varepsilon \ge 25$ is mostly noise.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{generated/reddit_privacy_utility.png}
+\caption{Macro-F1 of the utility model and the two TF-IDF attackers on the Reddit data. Dashed lines: values on original text.}
+\label{fig:privacy}
+\end{figure*}
+
+\subsection{LLM-as-judge}
+\label{sec:judge}
+BLEU measures surface overlap and CosSim embedding closeness, but neither says whether a rewrite is readable English or whether a person would consider the meaning kept. Following the LLM-as-judge paradigm \citep{zheng2023judging}, we give \JudgeModel{} (greedy decoding) an (original, rewrite) pair and ask for two 1--5 ratings, \emph{meaning preservation} and \emph{fluency} (prompt in Appendix~\ref{app:prompts}). We judge \NJudge{} SST-2 sentences and \NJudge{} Reddit test posts at $\varepsilon \in \{10, 50, 250\}$. To check the judge we add two controls per text: an \emph{identical} pair (should score 5/5) and a \emph{mismatched} pair, in which the rewrite is replaced by a different text from the same dataset (meaning should be $\approx$1 while fluency stays high). \JudgeParse\% of answers followed the format. For reference, the Reddit rewrites have BLEU/CosSim of \RedBleuTen/\RedCosTen{} at $\varepsilon=10$ and \RedBleuTwoFifty/\RedCosTwoFifty{} at $\varepsilon=250$.
+
+\begin{table}[t]
+\centering
+\small
+\resizebox{\columnwidth}{!}{\input{generated/tab_judge.tex}}
+\caption{Mean LLM-judge ratings (1--5) and mean CosSim per condition. Controls: identical text and an unrelated text.}
+\label{tab:judge}
+\end{table}
+
+Table~\ref{tab:judge} gives the results. On the rewrites, the judge's meaning score has a Spearman correlation of $\rho=\JudgeRho$ with CosSim ($n=\JudgeRhoN$). The \emph{meaning} scale passes both controls: identical pairs receive \JSstIdenticalM{} on both datasets and mismatched pairs \JSstMismatchedM{} (SST-2) and \JRedMismatchedM{} (Reddit). The \emph{fluency} scale does not: mismatched pairs consist of fluent human-written text, yet they receive only \JSstMismatchedF{} and \JRedMismatchedF, so the 3B judge does not rate fluency independently of meaning, and we do not interpret its fluency scores further. On the rewrites, the judge is far harsher than CosSim. Every rewrite at $\varepsilon=10$ gets the minimum meaning score, and even at $\varepsilon=250$ the mean is only \JSstEpsTwoFiftyM{} (SST-2) and \JRedEpsTwoFiftyM{} (Reddit), while CosSim is above 0.6. Reading the rewrites supports the judge: at $\varepsilon=250$, \emph{``engrossing and moving in its own right''} becomes \emph{``interactive and walking in its own manner''} and \emph{``deserves to be considered as a possible successor''} becomes \emph{``loves to be rejected as a proper response''}. These sentences share topic words with the original, which embedding similarity rewards, but their meaning is changed or reversed. SST-2 and Reddit are judged alike. The judge thus adds a finding that the automatic metrics hide: DP-MLM rewrites at the paper's budgets keep the \emph{topic} of a text much better than its \emph{propositional meaning}. The judge complements but does not replace human evaluation: it is a small open model, its fluency scale failed our control, its ratings were not validated against human ratings, and LLM judges are known to prefer fluent text \citep{zheng2023judging}. In our evaluation the LLM has three roles: a quality judge (this section), a second annotator of the constructed labels (Table~\ref{tab:agreement}) and a zero-shot attacker (Table~\ref{tab:reddit}).
+
+\subsection{Comparison with the replication}
+The utility side of DP-MLM generalises well by the paper's own metrics: IMDb reproduces the SST-2 curves, with sentiment better preserved on longer text. The LLM judge qualifies this for both the original and the new data: what is preserved is mostly topic and sentiment polarity, not the specific meaning of the sentence. The privacy side is more mixed than in the paper. On Trustpilot, rewriting at $\varepsilon=10$ removed about 14\% of the attacker's F1 (69.6$\rightarrow$59.7); on our data it removes 16\% for age (\FAgeSOrig$\rightarrow$\FAgeSTen) but only 7\% for gender (\FGenSOrig$\rightarrow$\FGenSTen), and the gender result is explained by tokens the mechanism leaves untouched by design. Benchmarks such as Trustpilot, where gender is mostly expressed through content words, can therefore overstate the protection DP-MLM gives in personal narratives.
+
+% =========================================================================
+\section{Ethical Considerations}
+\label{sec:ethics}
+% =========================================================================
+\paragraph{In the original paper.} The paper's ethics statement argues that no harm was done because all datasets were public, and notes that Yelp uses pseudonymous user IDs. Three issues deserve more discussion. First, the privacy experiments \emph{train attackers} that infer gender and identify authors; such classifiers are dual-use, even when built only to measure protection. Second, Trustpilot gender is a binary label taken from user profiles and collected for sociolinguistic research; reusing it for privacy attacks is allowed by its licence but is not the purpose for which it was collected. Third, and most important for users of the method, the guarantee is per token: a text of $n$ tokens has a total budget of $n\varepsilon$, so at the ``strict'' $\varepsilon=10$ a 20-token sentence has $\varepsilon=200$, which gives little formal protection. Our gender result adds that untouched stopwords are outside the guarantee altogether. The authors say that DP-MLM protects privacy ``empirically and by proxy'', but a practitioner who reads only the per-token $\varepsilon$ could overestimate the protection, and an easy-to-install package increases this risk.
+
+\paragraph{If we published on the new data.} The Australian Code for the Responsible Conduct of Research \citep{nhmrc2018code} asks researchers to act with honesty, rigour, transparency, fairness, respect and accountability, and to obtain ethics approval where required. Research on data about people, even public data, is human research under the National Statement \citep{nhmrc2023national}. Publishing on our Reddit dataset would raise the following issues.
+\begin{itemize}
+\setlength\itemsep{0pt}
+\item \textbf{Ethics review and consent.} Reddit users did not consent to their age and gender being used as labels for profiling experiments, and many social media users do not expect their posts to be used in research \citep{fiesler2018participant}. The work would probably qualify for low-risk review with a waiver of consent (public data, consent impracticable), but this requires approval by a Human Research Ethics Committee \emph{before} publication; this coursework project was not submitted for review.
+\item \textbf{Minors.} Our regular expression accepts ages from 13, and \NMinor{} posts (\PctMinor\%) in our sample are by posters who state an age under 18. Research involving children needs additional protection under the National Statement, so a published version should exclude these posts (a one-line filter in the notebook).
+\item \textbf{Re-identification.} Reddit posts are searchable, so a verbatim quote can be traced to an account even after tags and names are removed. We show only short cleaned snippets here and would release post IDs and code rather than texts with attribute labels attached.
+\item \textbf{Respect and fairness.} The tagging convention reduces gender to M/F, so non-binary posters are excluded, and the population (English-speaking users of relationship forums) is not representative. Our pronoun finding also depends on mostly heterosexual relationships; results should not be generalised beyond this sample.
+\item \textbf{Dual use.} The age and gender attackers, including the zero-shot LLM attacker, are profiling tools. They are needed to evaluate privatisation, but we would not release trained attackers.
+\item \textbf{Licence and terms.} The TL;DR corpus is released for research, but its content remains subject to Reddit's terms of use.
+\item \textbf{Transparency of AI use.} Generative AI was used to help write code and text; all outputs were checked and the author is responsible for them, in line with the Code's principle of accountability.
+\end{itemize}
+
+% =========================================================================
+\section{Conclusions and Reflections}
+\label{sec:conclusion}
+% =========================================================================
+\paragraph{Replication.} The core of DP-MLM was easy to replicate with the released package once two library-version problems were fixed. The BLEU and CosSim curves on SST-2 match the paper within 0.01 at $\varepsilon \le 25$ and are slightly lower at loose budgets, and the sentiment proxy shows the paper's trend. Re-implementing the method from the paper alone was much harder: the calibrated clipping bounds are not printed and the factor~2 in the temperature is easy to miss, and both change the guarantee. The full downstream protocol (DeBERTaV3 fine-tuning on privatised GLUE, three seeds, nine tasks) is expensive because every training token must be rewritten, which makes it the least reproducible part of the paper on student compute.
+
+\paragraph{Generalisation.} Utility generalised: IMDb behaves like SST-2. Privacy generalised only partly: age leakage is reduced by up to 10 F1 points, while gender leakage stays high because DP-MLM keeps pronouns. This shows that a privatisation method should be evaluated on data where the sensitive attribute is expressed in different ways, not only through content words.
+
+\paragraph{What we would do differently.} (1)~\emph{Choose the utility task before the data.} Our subreddit label was degenerate because self-tagging is a convention of one forum; a better utility task would be, for example, relationship type or the post's TL;DR summary scored by similarity. (2)~Measure the pronoun effect directly by also running DP-MLM with stopword replacement enabled, which the package supports. (3)~Use DeBERTaV3 for utility and attackers so that numbers are directly comparable with the paper, and repeat runs to reduce noise. (4)~Complete an independent human annotation of the audit sample and validate the LLM judge against human ratings; a larger judge model is needed, since our 3B model failed the fluency control and was biased as an annotator and attacker. (5)~Plan compute around the $n\varepsilon$ and $O(n)$ costs from the start; truncating texts to 60 words was a pragmatic choice that changes the task. Finally, label extraction was easier than expected, but checking for indirect leakage was harder, and the difficulty of a privacy benchmark depends on cleaning choices that the original datasets do not document either.
+
+\section*{Limitations}
+Our samples are small (\NSST{} SST-2 sentences, \NIMDB{} IMDb reviews, \NTest{} Reddit test posts) and each configuration was run once, so differences of a few points are within noise. The sentiment accuracy is a static proxy rather than the paper's fine-tuning protocol, attackers are TF-IDF models rather than DeBERTaV3, and the LLM judge, annotator and attacker is a 3B-parameter open model.
+
+\bibliography{references}
+
+\appendix
+\section{Additional figures and examples}
+\label{app:figs}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{generated/reddit_dataset_overview.png}
+\caption{Reddit self-disclosure dataset: construction funnel, self-disclosed ages (dashed line: bracket boundary), and subreddits in the experiment sample.}
+\label{fig:reddit-overview}
+\end{figure*}
+
+\begin{table}[h]
+\centering
+\small
+\input{generated/ex_demo2.tex}
+\caption{Demo sentence with self-disclosure. Stopwords (\emph{I, am, my, is, a}) never change; the age (24) survives at $\varepsilon=250$, while the partner noun is replaced (\emph{fiance}, \emph{girlfriend}).}
+\label{tab:demo-nurse}
+\end{table}
+
+\begin{table}[h]
+\centering
+\small
+\input{generated/ex_demo0.tex}
+\caption{Demo sentence with a name and a location.}
+\label{tab:demo-john}
+\end{table}
+
+\begin{table}[h]
+\centering
+\small
+\input{generated/ex_sst2.tex}
+\caption{DP-MLM rewrites of an SST-2 validation sentence.}
+\label{tab:sst2-ex}
+\end{table}
+
+\begin{table}[h]
+\centering
+\small
+\input{generated/ex_reddit_priv.tex}
+\caption{DP-MLM rewrites of a Reddit test post.}
+\label{tab:reddit-priv}
+\end{table}
+
+\section{LLM prompts}
+\label{app:prompts}
+All prompts use the model's chat template with a short system message and greedy decoding.
+
+\paragraph{Judge.} \textit{Text A is an original text. Text B is an automatically rewritten version of it. Text A: \{a\} Text B: \{b\}. Rate Text B on two 1--5 scales. Meaning: how well does B preserve the meaning of A? (1 = unrelated, 3 = partly preserved, 5 = same meaning). Fluency: how natural and grammatical is B as English, ignoring A? (1 = gibberish, 3 = understandable but awkward, 5 = fully fluent). Answer exactly as: Meaning: $<$1-5$>$; Fluency: $<$1-5$>$}
+
+\paragraph{Annotator.} \textit{Reddit title: \{t\} Reddit post: \{p\}. What gender and age does the POSTER (the person who wrote this, not their partner or anyone else) state for themselves? Answer exactly as: Gender: $<$M or F or ?$>$; Age: $<$number or ?$>$}
+
+\paragraph{Attacker.} \textit{Here is a Reddit post with all explicit age and gender tags removed: \{p\}. Guess the author's gender and whether the author is 25 or younger. Answer exactly as: Gender: $<$M or F$>$; Age: $<$25 or younger / over 25$>$}
+
+\end{document}

@@ -1,0 +1,3 @@
+attribute,pair,n,kappa,raw agreement
+gender,regex vs LLM,100,0.474,0.72
+age bracket,regex vs LLM,100,0.972,0.99
