@@ -35,7 +35,9 @@ No API keys are needed: all models (RoBERTa-base, MiniLM, DistilBERT SST-2, Qwen
 | 6 | LLM-as-judge (meaning, fluency, with controls), LLM annotator (Cohen's κ), zero-shot LLM attacker |
 | 7 | Export of all numbers/tables/figures for the LaTeX report (`results/generated/`) |
 
-### Human audit of the constructed labels (optional, recommended)
+### Human audit of the constructed labels
+The 100-post audit sample was annotated by the author (results in `results/llm/label_agreement.csv`).
+To repeat it:
 `results/reddit_audit_sample_100.csv` contains 100 posts **without** the extracted labels. Fill `human_gender`
 (`M`/`F`/`?`) and `human_age_bracket` (`<=25`/`>25`/`?`) for the poster, upload the file back to `results/`
 with the same name, and re-run the last cells of Part 6 and Part 7. Cohen's κ against the regex labels and the
